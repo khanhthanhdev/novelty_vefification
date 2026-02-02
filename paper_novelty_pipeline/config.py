@@ -26,6 +26,12 @@ OPENREVIEW_PDF_URL = "https://openreview.net/pdf"
 # Wispaper API Configuration
 WISPAPER_API_ENDPOINT = os.getenv("WISPAPER_API_ENDPOINT", "https://gateway.wispaper.ai/api/v1/search/completions")
 
+# Semantic Scholar API Configuration (Phase 2 search)
+SEMANTIC_SCHOLAR_API_BASE = os.getenv(
+    "SEMANTIC_SCHOLAR_API_BASE", "https://api.semanticscholar.org/graph/v1"
+)
+SEMANTIC_SCHOLAR_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY") or None
+
 
 # LLM API Configuration (global defaults)
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
@@ -96,6 +102,7 @@ PHASE2_REQUIRE_100_SUCCESS = os.getenv("PHASE2_REQUIRE_100_SUCCESS", "true").low
 PHASE2_STRICT_REQUIRE_RAW_PATH = os.getenv("PHASE2_STRICT_REQUIRE_RAW_PATH", "true").lower() == "true"
 # Per-query retry attempts inside `search_structured` (kept separate from MAX_RETRIES to avoid extremely long waits).
 PHASE2_MAX_QUERY_ATTEMPTS = int(os.getenv("PHASE2_MAX_QUERY_ATTEMPTS", "8"))
+PHASE2_SEMANTIC_SCHOLAR_LIMIT = int(os.getenv("PHASE2_SEMANTIC_SCHOLAR_LIMIT", "10"))
 
 # Timeout Configuration
 API_TIMEOUT = int(os.getenv("API_TIMEOUT", "240"))  # seconds

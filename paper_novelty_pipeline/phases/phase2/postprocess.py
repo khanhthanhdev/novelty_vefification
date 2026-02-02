@@ -204,6 +204,12 @@ def _calculate_quality_flags(verdict: Optional[Dict[str, Any]]) -> Dict[str, boo
     return {"perfect": False, "partial": False, "no": True}
 
 
+def _ensure_default_flags(paper: Dict[str, Any]) -> None:
+    """Ensure the paper dict contains quality flags."""
+    if "flags" not in paper:
+        paper["flags"] = {"perfect": True, "partial": False, "no": False}
+
+
 def _ensure_openreview_id(paper: Dict[str, Any]) -> Optional[str]:
     """
     Extract and normalize OpenReview ID from paper metadata.
@@ -287,6 +293,8 @@ class Phase2Processor:
         self.final_dir.mkdir(parents=True, exist_ok=True)
 
         self.cutoff_year = cutoff_year
+        if self.cutoff_year is None:
+            self.cutoff_year = self._load_cutoff_year_from_phase1()
         self.self_pdf_url = self_pdf_url
         self.self_title = self_title
         self.topk_core_task = topk_core_task
@@ -425,14 +433,16 @@ class Phase2Processor:
         for raw_file in self.raw_responses_dir.glob("raw_*.json"):
             try:
                 with open(raw_file, 'r', encoding='utf-8') as f:
-                    events = json.load(f)
-                
+                    payload = json.load(f)
+
                 scope = self._identify_scope(raw_file.name)
+                if not scope and isinstance(payload, dict):
+                    scope = payload.get("scope")
                 if not scope:
                     logger.warning(f"Could not identify scope for {raw_file.name}. Skipping.")
                     continue
-                
-                extracted_papers = self._extract_papers_from_events(events)
+
+                extracted_papers = self._extract_papers_from_events(payload)
                 papers_by_scope[scope].extend(extracted_papers)
                 
             except Exception as e:
@@ -447,46 +457,80 @@ class Phase2Processor:
             return match.group(1)
         return None
 
-    def _extract_papers_from_events(self, events: List[Dict]) -> List[Dict]:
-        """
-        Extract paper metadata from Wispaper SSE events and generate quality flags.
-        
-        Parses verification events from Wispaper's streaming response, extracting
-        paper metadata and calculating quality flags based on the verdict.
-        
-        Args:
-            events: List of SSE event dictionaries from Wispaper API
-            
-        Returns:
-            List of paper dictionaries with 'flags' field added
-        """
-        papers: List[Dict] = []
-        for event in events:
-            if event.get("event") == "onAgentEnd" and event.get("name") == "verification":
-                data = event.get("data", {})
-                metadata = data.get("metadata", {})
-                content = data.get("content")  # This contains the verdict JSON string
-                
-                if not metadata:
-                    continue
+    def _load_cutoff_year_from_phase1(self) -> Optional[int]:
+        """Load publication year from phase1/pub_date.json if available."""
+        base_dir = self.phase2_dir.parent
+        pub_date_path = base_dir / "phase1" / "pub_date.json"
+        if not pub_date_path.exists():
+            return None
+        try:
+            data = json.loads(pub_date_path.read_text(encoding="utf-8"))
+            year_val = data.get("year")
+            if year_val is None:
+                return None
+            return int(year_val)
+        except Exception:
+            return None
 
-                # Parse verdict JSON from content
-                verdict = None
-                if isinstance(content, str):
-                    try:
-                        verdict = json.loads(content)
-                    except json.JSONDecodeError:
-                        logger.debug(f"Could not decode verdict JSON from content: {content[:100]}...")
+    def _extract_papers_from_events(self, events: Any) -> List[Dict]:
+        """
+        Extract paper metadata from Wispaper SSE events or Semantic Scholar payloads.
+
+        Supports:
+          - Wispaper SSE event lists (legacy)
+          - Semantic Scholar payload dicts containing "papers"
+          - Direct paper lists (already normalized)
+        """
+        if isinstance(events, dict):
+            papers = events.get("papers") or events.get("results") or events.get("data") or []
+            return self._normalize_paper_list(papers)
+
+        if isinstance(events, list):
+            # Wispaper SSE event list
+            if any(isinstance(e, dict) and e.get("event") for e in events):
+                papers: List[Dict] = []
+                for event in events:
+                    if event.get("event") == "onAgentEnd" and event.get("name") == "verification":
+                        data = event.get("data", {})
+                        metadata = data.get("metadata", {})
+                        content = data.get("content")  # This contains the verdict JSON string
+
+                        if not metadata:
+                            continue
+
+                        # Parse verdict JSON from content
                         verdict = None
-                
-                # Calculate quality flags using the extracted helper function
-                flags = _calculate_quality_flags(verdict)
-                
-                paper = dict(metadata)  # Copy metadata
-                paper['flags'] = flags  # Add generated flags
-                papers.append(paper)
-        
-        return papers
+                        if isinstance(content, str):
+                            try:
+                                verdict = json.loads(content)
+                            except json.JSONDecodeError:
+                                logger.debug(
+                                    f"Could not decode verdict JSON from content: {content[:100]}..."
+                                )
+                                verdict = None
+
+                        # Calculate quality flags using the extracted helper function
+                        flags = _calculate_quality_flags(verdict)
+
+                        paper = dict(metadata)  # Copy metadata
+                        paper["flags"] = flags  # Add generated flags
+                        papers.append(paper)
+                return papers
+
+            # Direct list of paper dicts
+            return self._normalize_paper_list(events)
+
+        return []
+
+    def _normalize_paper_list(self, papers: List[Any]) -> List[Dict]:
+        normalized: List[Dict] = []
+        for paper in papers:
+            if not isinstance(paper, dict):
+                continue
+            item = dict(paper)
+            _ensure_default_flags(item)
+            normalized.append(item)
+        return normalized
 
     def _process_scope(
         self,

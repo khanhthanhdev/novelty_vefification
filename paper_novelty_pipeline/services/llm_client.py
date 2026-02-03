@@ -534,6 +534,13 @@ class OpenAIClient(BaseLLMClient):
             content = resp.choices[0].message.content
             finish_reason = getattr(resp.choices[0], 'finish_reason', None)
             
+            # Debug: log raw content (more for debugging)
+            if content:
+                self.logger.debug(f"LLM raw content length: {len(content)} chars, finish_reason: {finish_reason}")
+                self.logger.debug(f"LLM raw content (first 2000 chars): {content[:2000]}")
+                if len(content) > 2000:
+                    self.logger.debug(f"LLM raw content (last 500 chars): ...{content[-500:]}")
+            
             if not content or not content.strip():
                 # Check if this is a reasoning model that used all tokens for reasoning
                 usage = getattr(resp, 'usage', None)
@@ -774,7 +781,8 @@ def create_llm_client(
 
     # Channel 2: Standard OpenAI or other OpenAI-compatible APIs
     if normalized_provider in ('openai', 'azure', 'default'):
-        if model and '/' in model:
+        # Only strip model prefix for actual OpenAI endpoints, not OpenAI-compatible ones
+        if model and '/' in model and 'api.openai.com' in normalized_endpoint:
             try:
                 model = model.split('/')[-1]
             except Exception:

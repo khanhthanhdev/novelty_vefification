@@ -31,11 +31,39 @@ Keep original formatting and also a plain version.
 
 This step produces structured targets for retrieval and claim-checking.
 
+Output JSON (single object; BOTH sections are required):
+
+{
+  "paper": {
+    "core_task": "string (<=20 words)",
+    "contributions": [
+      "string (<=25 words)",
+      "string (<=25 words)"
+    ],
+    "key_terms": ["5-12 short phrases"],
+    "must_have_entities": ["model/dataset/metric names if any"]
+  },
+  "review": {
+    "novelty_claims": [
+      {
+        "claim_id": "C1",
+        "text": "verbatim review claim (1-2 sentences max)",
+        "stance": "not_novel | somewhat_novel | novel | unclear",
+        "confidence_lang": "high | medium | low",
+        "mentions_prior_work": true,
+        "prior_work_strings": ["author-year strings or titles as written"],
+        "evidence_expected": "method_similarity | task_similarity | results_similarity | theory_overlap | dataset_overlap"
+      }
+    ],
+    "all_citations_raw": ["everything that looks like a citation/title/arxiv id/url"]
+  }
+}
+
 1.1 Paper-side extraction (short, constrained)
 
 Goal: get 1 core task + 1–2 contributions as query anchors (not a summary).
 
-Output JSON (schema)
+Paper fields (within "paper" key)
 
 {
   "paper": {
@@ -60,7 +88,7 @@ contributions should be atomic: method change / training recipe / benchmark / th
 
 Goal: extract novelty-related claims from the review, and parse citations.
 
-Output JSON (schema)
+Review fields (within "review" key)
 
 {
   "review": {

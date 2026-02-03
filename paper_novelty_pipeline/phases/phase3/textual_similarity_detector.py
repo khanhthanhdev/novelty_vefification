@@ -488,7 +488,17 @@ class TextualSimilarityDetector:
             
             # Parse the text response manually
             result = parse_json_flexible(result_text)
-            
+            if result is None:
+                if self._looks_like_no_similarity(result_text):
+                    result = {"plagiarism_segments": []}
+                else:
+                    self.logger.warning(
+                        f"Failed to parse similarity response for {candidate_info['canonical_id']}"
+                    )
+                    return []
+
+            result = self._normalize_similarity_payload(result)
+
             if result:
                 # Save raw response
                 self.llm_analyzer._save_llm_response(
@@ -497,12 +507,6 @@ class TextualSimilarityDetector:
                     candidate_info["canonical_id"],
                     context="unified_detection"
                 )
-                
-                # Handle both dict format (with "similarity_segments" key) and direct list format
-                if isinstance(result, list):
-                    # LLM returned a direct list instead of {"similarity_segments": [...]}
-                    self.logger.debug(f"LLM returned direct list format for {candidate_info['canonical_id']}, wrapping...")
-                    result = {"similarity_segments": result}
                 
                 if isinstance(result, dict):
                     # Use existing _parse_similarity_segments method
@@ -529,7 +533,9 @@ class TextualSimilarityDetector:
                             f"for {candidate_info['canonical_id']}"
                         )
             else:
-                self.logger.warning(f"Failed to parse similarity response for {candidate_info['canonical_id']}")
+                self.logger.warning(
+                    f"Failed to normalize similarity response for {candidate_info['canonical_id']}"
+                )
         
         except Exception as e:
             self.logger.error(
@@ -678,4 +684,55 @@ class TextualSimilarityDetector:
         safe_text = re.sub(r'[^\w\-.]', '_', text or "unknown")
         # Limit length
         return safe_text[:150] if len(safe_text) > 150 else safe_text
+
+    def _normalize_similarity_payload(self, parsed: Any) -> Optional[Dict[str, Any]]:
+        """
+        Normalize LLM output into a dict with a plagiarism_segments list.
+        Accepts dict or list outputs and common alternative key names.
+        """
+        if parsed is None:
+            return None
+        if isinstance(parsed, list):
+            self.logger.debug("LLM returned list format; wrapping in plagiarism_segments.")
+            return {"plagiarism_segments": parsed}
+        if not isinstance(parsed, dict):
+            return None
+
+        if "plagiarism_segments" in parsed and not isinstance(parsed["plagiarism_segments"], list):
+            parsed["plagiarism_segments"] = []
+            return parsed
+
+        if "plagiarism_segments" in parsed or "similarity_segments" in parsed:
+            return parsed
+
+        for key in (
+            "textual_similarity_segments",
+            "segments",
+            "overlap_segments",
+            "plagiarized_segments",
+            "matches",
+        ):
+            value = parsed.get(key)
+            if isinstance(value, list):
+                parsed["plagiarism_segments"] = value
+                return parsed
+
+        return parsed
+
+    def _looks_like_no_similarity(self, text: str) -> bool:
+        if not text:
+            return False
+        low = text.lower()
+        return any(
+            phrase in low
+            for phrase in (
+                "no plagiarism",
+                "no similar",
+                "no significant overlap",
+                "no overlap",
+                "no copied",
+                "no substantial overlap",
+                "no evidence of plagiarism",
+            )
+        )
 

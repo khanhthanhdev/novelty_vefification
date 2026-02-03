@@ -1,0 +1,127 @@
+{
+  "paper": {
+    "core_task": "Enhancing transferable adversarial attacks on Vision Transformers",
+    "contributions": [
+      {
+        "name": "Gradient Normalization Scaling (GNS) method",
+        "author_claim_text": "We present a novel Gradient Normalization Scaling and High Frequency Adaptation(GNS-HFA) method to enhance the transferability of adversarial samples on ViTs.",
+        "description": "A novel method called Gradient Normalization Scaling (GNS) is proposed to edit gradients at a fine-grained level, aiming to scale mild gradients to prevent overfitting during adversarial sample training and improve transferability.",
+        "source_hint": "Abstract"
+      },
+      {
+        "name": "High-Frequency Adaptation (HFA) method",
+        "author_claim_text": "The proposed method addresses the challenge of gradient variations during backpropagation process by normalizing and scaling the gradients, as well as constructing masks to explore the impact of attacks in different frequency regions on ViTs.",
+        "description": "The High-Frequency Adaptation (HFA) method is introduced, which leverages the insight that ViTs focus on high-frequency features. It uses frequency domain exploration and masking to enhance the transferability of adversarial attacks.",
+        "source_hint": "Introduction §1"
+      }
+    ],
+    "key_terms": [
+      "Transferable adversarial attacks",
+      "Vision Transformers (ViTs)",
+      "Gradient Normalization Scaling (GNS)",
+      "High-Frequency Adaptation (HFA)",
+      "Mild gradients",
+      "Extreme gradients",
+      "Frequency domain",
+      "Overfitting",
+      "Gradient editing"
+    ],
+    "must_have_entities": [
+      "ViT",
+      "CNN",
+      "GNS",
+      "HFA",
+      "TGR",
+      "SSA",
+      "PNA",
+      "LeViT-256",
+      "PiT-B",
+      "DeiT-B",
+      "ViT-B/16",
+      "TNT-S",
+      "ConViT-B",
+      "Visformer-S",
+      "CaiT-S/24",
+      "Inception-v3",
+      "Inception-v4",
+      "Inception-ResNet-v2",
+      "ResNet-101"
+    ]
+  },
+  "review": {
+    "novelty_claims": [
+      {
+        "claim_id": "C1",
+        "text": "As shown in Table 1, we constructed the adversarial samples on the CaiT-S/24\nmodel by removing mild gradients and extreme gradients respectively, and\ncalculated the average attack success rate after these adversarial samples\nwere transferred to attack other ViT and CNN models.",
+        "stance": "not_novel",
+        "confidence_lang": "medium",
+        "mentions_prior_work": false,
+        "prior_work_strings": [],
+        "evidence_expected": "method_similarity"
+      },
+      {
+        "claim_id": "C2",
+        "text": "The contribution is marginal, since the gradient normalization was\ndemonstrated in [1], please discuss the major differences.",
+        "stance": "not_novel",
+        "confidence_lang": "medium",
+        "mentions_prior_work": true,
+        "prior_work_strings": [
+          "[1]"
+        ],
+        "evidence_expected": "method_similarity"
+      },
+      {
+        "claim_id": "C3",
+        "text": "In order to enhance the transferability of adversarial attacks on ViTs, this\npaper introduces a novel gradient normalization scaling method for fine-\ngrained gradient editing.",
+        "stance": "novel",
+        "confidence_lang": "medium",
+        "mentions_prior_work": false,
+        "prior_work_strings": [],
+        "evidence_expected": "method_similarity"
+      },
+      {
+        "claim_id": "C4",
+        "text": "This paper comes up with a novel problem space.",
+        "stance": "novel",
+        "confidence_lang": "medium",
+        "mentions_prior_work": false,
+        "prior_work_strings": [],
+        "evidence_expected": "method_similarity"
+      },
+      {
+        "claim_id": "C5",
+        "text": "As shown in **Figure 2 in the paper** , removing ‘mild gradients’ results in a\ngreater improvement in attack success rate compared to removing ‘extreme\ngradients’, indicating that ‘mild gradients’ are more prone to overfitting,\nthereby affecting the training of adversarial samples on the surrogate model.",
+        "stance": "not_novel",
+        "confidence_lang": "medium",
+        "mentions_prior_work": false,
+        "prior_work_strings": [],
+        "evidence_expected": "results_similarity"
+      }
+    ],
+    "all_citations_raw": [
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=qB7VJtEgxm",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=ynZTcCaa8k",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=wDAtKvyeM1",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=AOf4xFJRTb",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=B392Q5WXYi",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=S1XRpbhwHs",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=E4MFd172m8",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=pgZMH2zKV2",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=waXh4QqsCg",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=hSj10Sniux",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=WfdcmyeuNU",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=ofSjwpXA2u",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=VDJXwQfP95",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=2dqFvoE5xR",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=CJCl9AUpXs",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=ETdmI9fEF7",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=wAR2UODLNc",
+      "https://openreview.net/forum?id=1BuWv9poWz&noteId=ldfKM8ZL3S",
+      "[Revisions]",
+      "[1]",
+      "[2]",
+      "[3]",
+      "[4]"
+    ]
+  }
+}

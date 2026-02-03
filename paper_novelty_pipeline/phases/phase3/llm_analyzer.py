@@ -949,7 +949,14 @@ class LLMAnalyzer:
         for backward compatibility.
         """
         similarity_segments: List[TextualSimilaritySegment] = []
-        segments_list = parsed.get("plagiarism_segments") or parsed.get("similarity_segments", [])
+        segments_list = (
+            parsed.get("plagiarism_segments")
+            or parsed.get("similarity_segments")
+            or parsed.get("textual_similarity_segments")
+            or parsed.get("segments")
+            or parsed.get("overlap_segments")
+            or []
+        )
         self._log_similarity_list(candidate, segments_list)
 
         for segment_data in segments_list:

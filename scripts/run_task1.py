@@ -16,6 +16,7 @@ Usage:
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -24,6 +25,7 @@ from typing import Any, Dict, Optional
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from novelty_assessment.task1_extractor import extract_task1, Task1ExtractionError
+from novelty_assessment.task2_related_works import retrieve_related_works
 
 
 def setup_logging(verbose: bool = False) -> logging.Logger:
@@ -151,6 +153,14 @@ Examples:
   # Print to stdout (no output file)
   python scripts/run_task1.py --paper paper.txt --review review.txt
 
+  # Using custom provider
+  python scripts/run_task1.py --paper paper.txt --review review.txt \
+    --llm-provider openrouter \
+    --llm-api-key "sk-or-v1-..." \
+    --llm-api-endpoint "https://openrouter.ai/api/v1" \
+    --llm-model-name "anthropic/claude-sonnet-4.5" \
+    --output result.json
+
 Input JSON format:
   {
     "paper_text": "full paper text...",
@@ -216,6 +226,35 @@ Output JSON format:
         help="Path to output JSON file (prints to stdout if not specified)",
     )
 
+    # Task 2 options (optional)
+    parser.add_argument(
+        "--task2-output",
+        type=Path,
+        help="Optional: run Task 2 retrieval and save output JSON",
+    )
+    parser.add_argument(
+        "--task2-mode",
+        type=str,
+        choices=["per_contribution", "fixed"],
+        default="per_contribution",
+        help="Task 2 query mode (default: per_contribution)",
+    )
+    parser.add_argument(
+        "--task2-paper-year",
+        type=int,
+        help="Filter out Task 2 candidates published after this year",
+    )
+    parser.add_argument(
+        "--task2-cache",
+        action="store_true",
+        help="Enable Task 2 on-disk cache",
+    )
+    parser.add_argument(
+        "--task2-cache-dir",
+        type=Path,
+        help="Task 2 cache directory (default: output/task2_cache)",
+    )
+
     # Extraction options
     parser.add_argument(
         "--no-strict-verbatim",
@@ -228,6 +267,28 @@ Output JSON format:
         help="Disable regex-based citation augmentation",
     )
 
+    # Custom provider options
+    parser.add_argument(
+        "--llm-provider",
+        type=str,
+        help="LLM provider (openai, openrouter, azure)",
+    )
+    parser.add_argument(
+        "--llm-api-key",
+        type=str,
+        help="LLM API key",
+    )
+    parser.add_argument(
+        "--llm-api-endpoint",
+        type=str,
+        help="LLM API endpoint URL",
+    )
+    parser.add_argument(
+        "--llm-model-name",
+        type=str,
+        help="LLM model name",
+    )
+
     # Other options
     parser.add_argument(
         "-v",
@@ -237,6 +298,16 @@ Output JSON format:
     )
 
     args = parser.parse_args()
+
+    # Set custom provider environment variables if provided (before imports)
+    if args.llm_provider:
+        os.environ["LLM_PROVIDER"] = args.llm_provider
+    if args.llm_api_key:
+        os.environ["LLM_API_KEY"] = args.llm_api_key
+    if args.llm_api_endpoint:
+        os.environ["LLM_API_ENDPOINT"] = args.llm_api_endpoint
+    if args.llm_model_name:
+        os.environ["LLM_MODEL_NAME"] = args.llm_model_name
 
     # Validate input combinations
     if args.paper and not args.review:
@@ -269,6 +340,20 @@ Output JSON format:
         strict_review_verbatim=not args.no_strict_verbatim,
         augment_citations_regex=not args.no_augment_citations,
     )
+
+    # Optional Task 2 retrieval
+    if args.task2_output:
+        log = logging.getLogger(__name__)
+        task2_result = retrieve_related_works(
+            result,
+            paper_year=args.task2_paper_year,
+            mode=args.task2_mode,
+            use_cache=args.task2_cache,
+            cache_dir=args.task2_cache_dir,
+            logger=log,
+        )
+        save_output_json(args.task2_output, task2_result)
+        log.info("✓ Task 2 output saved to: %s", args.task2_output)
 
     # If no output file specified, print to stdout
     if not args.output:

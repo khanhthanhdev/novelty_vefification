@@ -44,6 +44,10 @@ class SemanticScholarClient:
         key = api_key or SEMANTIC_SCHOLAR_API_KEY
         if key:
             self.session.headers["x-api-key"] = key
+        
+        # Rate limiting: 1 request per 1.5 seconds
+        self._last_request_time = 0.0
+        self._min_request_interval = 1.5
 
     def search(
         self,
@@ -65,6 +69,12 @@ class SemanticScholarClient:
         last_exc: Optional[Exception] = None
         for attempt in range(self.max_attempts):
             try:
+                # Rate limiting: ensure 1.5 seconds between requests
+                elapsed = time.time() - self._last_request_time
+                if elapsed < self._min_request_interval:
+                    time.sleep(self._min_request_interval - elapsed)
+                
+                self._last_request_time = time.time()
                 resp = self.session.get(url, params=params, timeout=self.timeout)
                 if resp.status_code in (429, 500, 502, 503, 504):
                     raise requests.RequestException(f"HTTP {resp.status_code}")

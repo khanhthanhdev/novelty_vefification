@@ -20,7 +20,9 @@ import argparse
 import json
 import logging
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
@@ -39,6 +41,16 @@ def setup_logging(verbose: bool = False) -> logging.Logger:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     return logging.getLogger(__name__)
+
+
+# Thread lock for thread-safe logging
+_log_lock = threading.Lock()
+
+
+def log_thread_safe(logger: logging.Logger, level: str, message: str) -> None:
+    """Log message in a thread-safe manner."""
+    with _log_lock:
+        getattr(logger, level)(message)
 
 
 def find_matching_papers(
@@ -92,48 +104,48 @@ def process_paper(
     mode: str = "per_contribution",
     skip_existing: bool = False,
     logger: logging.Logger,
-) -> Tuple[bool, bool]:
+) -> Tuple[str, bool, bool]:
     """
     Process a single paper: run Task 1 and Task 2.
     
     Returns:
-        (task1_success, task2_success)
+        (paper_id, task1_success, task2_success)
     """
     task1_output_path = output_dir / paper_id / "task1_result.json"
     task2_output_path = output_dir / paper_id / "task2_result.json"
     
     # Check if we should skip
     if skip_existing and task1_output_path.exists() and task2_output_path.exists():
-        logger.info(f"[{paper_id}] Skipping (outputs already exist)")
-        return (True, True)
+        log_thread_safe(logger, "info", f"[{paper_id}] Skipping (outputs already exist)")
+        return (paper_id, True, True)
     
-    logger.info(f"[{paper_id}] Processing paper...")
+    log_thread_safe(logger, "info", f"[{paper_id}] Processing paper...")
     
     # Load paper and review text
     try:
         paper_text = load_text_file(paper_path)
         review_text = load_text_file(review_path)
     except Exception as e:
-        logger.error(f"[{paper_id}] Failed to load files: {e}")
-        return (False, False)
+        log_thread_safe(logger, "error", f"[{paper_id}] Failed to load files: {e}")
+        return (paper_id, False, False)
     
-    logger.info(f"[{paper_id}] Paper: {len(paper_text)} chars, Review: {len(review_text)} chars")
+    log_thread_safe(logger, "info", f"[{paper_id}] Paper: {len(paper_text)} chars, Review: {len(review_text)} chars")
     
     # Task 1: Extraction
     task1_success = False
     task1_result = None
     
     if skip_existing and task1_output_path.exists():
-        logger.info(f"[{paper_id}] Task 1 output exists, loading...")
+        log_thread_safe(logger, "info", f"[{paper_id}] Task 1 output exists, loading...")
         try:
             with task1_output_path.open("r", encoding="utf-8") as f:
                 task1_result = json.load(f)
             task1_success = True
         except Exception as e:
-            logger.warning(f"[{paper_id}] Failed to load existing Task 1 output: {e}")
+            log_thread_safe(logger, "warning", f"[{paper_id}] Failed to load existing Task 1 output: {e}")
     
     if not task1_success:
-        logger.info(f"[{paper_id}] Running Task 1 extraction...")
+        log_thread_safe(logger, "info", f"[{paper_id}] Running Task 1 extraction...")
         try:
             task1_result = extract_task1(
                 paper_text=paper_text,
@@ -145,32 +157,32 @@ def process_paper(
             )
             
             save_json(task1_output_path, task1_result)
-            logger.info(f"[{paper_id}] ✓ Task 1 completed, saved to {task1_output_path}")
+            log_thread_safe(logger, "info", f"[{paper_id}] ✓ Task 1 completed, saved to {task1_output_path}")
             
             # Log summary
             paper_data = task1_result.get("paper", {})
             review_data = task1_result.get("review", {})
-            logger.info(f"[{paper_id}]   - Core task: {paper_data.get('core_task', 'N/A')}")
-            logger.info(f"[{paper_id}]   - Contributions: {len(paper_data.get('contributions', []))}")
-            logger.info(f"[{paper_id}]   - Novelty claims: {len(review_data.get('novelty_claims', []))}")
+            log_thread_safe(logger, "info", f"[{paper_id}]   - Core task: {paper_data.get('core_task', 'N/A')}")
+            log_thread_safe(logger, "info", f"[{paper_id}]   - Contributions: {len(paper_data.get('contributions', []))}")
+            log_thread_safe(logger, "info", f"[{paper_id}]   - Novelty claims: {len(review_data.get('novelty_claims', []))}")
             
             task1_success = True
             
         except Task1ExtractionError as e:
-            logger.error(f"[{paper_id}] Task 1 extraction failed: {e}")
-            return (False, False)
+            log_thread_safe(logger, "error", f"[{paper_id}] Task 1 extraction failed: {e}")
+            return (paper_id, False, False)
         except Exception as e:
-            logger.error(f"[{paper_id}] Task 1 unexpected error: {e}", exc_info=True)
-            return (False, False)
+            log_thread_safe(logger, "error", f"[{paper_id}] Task 1 unexpected error: {e}", exc_info=True)
+            return (paper_id, False, False)
     
     # Task 2: Related works retrieval
     task2_success = False
     
     if skip_existing and task2_output_path.exists():
-        logger.info(f"[{paper_id}] Task 2 output exists, skipping...")
+        log_thread_safe(logger, "info", f"[{paper_id}] Task 2 output exists, skipping...")
         task2_success = True
     else:
-        logger.info(f"[{paper_id}] Running Task 2 related works retrieval...")
+        log_thread_safe(logger, "info", f"[{paper_id}] Running Task 2 related works retrieval...")
         try:
             task2_result = retrieve_related_works(
                 task1_output=task1_result,
@@ -186,20 +198,20 @@ def process_paper(
             )
             
             save_json(task2_output_path, task2_result)
-            logger.info(f"[{paper_id}] ✓ Task 2 completed, saved to {task2_output_path}")
+            log_thread_safe(logger, "info", f"[{paper_id}] ✓ Task 2 completed, saved to {task2_output_path}")
             
             # Log summary
             stats = task2_result.get("stats", {})
-            logger.info(f"[{paper_id}]   - Queries: {len(task2_result.get('queries', []))}")
-            logger.info(f"[{paper_id}]   - Candidates found: {stats.get('final', 0)}")
+            log_thread_safe(logger, "info", f"[{paper_id}]   - Queries: {len(task2_result.get('queries', []))}")
+            log_thread_safe(logger, "info", f"[{paper_id}]   - Candidates found: {stats.get('final', 0)}")
             
             task2_success = True
             
         except Exception as e:
-            logger.error(f"[{paper_id}] Task 2 failed: {e}", exc_info=True)
-            return (task1_success, False)
+            log_thread_safe(logger, "error", f"[{paper_id}] Task 2 failed: {e}", exc_info=True)
+            return (paper_id, task1_success, False)
     
-    return (task1_success, task2_success)
+    return (paper_id, task1_success, task2_success)
 
 
 def main() -> None:
@@ -237,6 +249,18 @@ def main() -> None:
         choices=["per_contribution", "fixed"],
         default="per_contribution",
         help="Task 2 query mode (default: per_contribution)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=5,
+        help="Number of parallel workers (default: 8)",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=10,
+        help="Number of papers to process in each batch (default: 10)",
     )
     parser.add_argument(
         "--paper-ids",
@@ -295,8 +319,9 @@ def main() -> None:
         log.info(f"Total: {len(matches)} papers")
         return
     
-    # Process all papers
-    log.info(f"Starting batch processing of {len(matches)} papers...")
+    # Process all papers in batches with parallel workers
+    log.info(f"Starting parallel batch processing of {len(matches)} papers...")
+    log.info(f"Batch size: {args.batch_size} papers, Workers per batch: {args.workers}")
     log.info("=" * 80)
     
     results = {
@@ -307,32 +332,67 @@ def main() -> None:
         "failed": [],
     }
     
-    for idx, (paper_id, paper_path, review_path) in enumerate(matches, start=1):
-        log.info(f"\n[{idx}/{len(matches)}] Processing {paper_id}...")
+    # Process papers in batches
+    total_completed = 0
+    num_batches = (len(matches) + args.batch_size - 1) // args.batch_size  # Ceiling division
+    
+    for batch_idx in range(num_batches):
+        batch_start = batch_idx * args.batch_size
+        batch_end = min(batch_start + args.batch_size, len(matches))
+        batch = matches[batch_start:batch_end]
         
-        task1_ok, task2_ok = process_paper(
-            paper_id=paper_id,
-            paper_path=paper_path,
-            review_path=review_path,
-            output_dir=args.output_dir,
-            paper_year=args.paper_year,
-            mode=args.mode,
-            skip_existing=args.skip_existing,
-            logger=log,
-        )
+        log.info(f"\n{'='*80}")
+        log.info(f"Processing batch {batch_idx + 1}/{num_batches} ({len(batch)} papers)...")
+        log.info(f"{'='*80}")
         
-        if task1_ok:
-            results["task1_success"] += 1
-        if task2_ok:
-            results["task2_success"] += 1
-        if task1_ok and task2_ok:
-            results["both_success"] += 1
-        else:
-            results["failed"].append(paper_id)
+        # Submit batch tasks to thread pool
+        with ThreadPoolExecutor(max_workers=args.workers) as executor:
+            # Create a mapping of future to paper_id for tracking
+            future_to_paper_id = {}
+            
+            for paper_id, paper_path, review_path in batch:
+                future = executor.submit(
+                    process_paper,
+                    paper_id=paper_id,
+                    paper_path=paper_path,
+                    review_path=review_path,
+                    output_dir=args.output_dir,
+                    paper_year=args.paper_year,
+                    mode=args.mode,
+                    skip_existing=args.skip_existing,
+                    logger=log,
+                )
+                future_to_paper_id[future] = paper_id
+            
+            # Collect results as they complete
+            batch_completed = 0
+            for future in as_completed(future_to_paper_id):
+                batch_completed += 1
+                total_completed += 1
+                paper_id, task1_ok, task2_ok = future.result()
+                
+                if task1_ok:
+                    results["task1_success"] += 1
+                if task2_ok:
+                    results["task2_success"] += 1
+                if task1_ok and task2_ok:
+                    results["both_success"] += 1
+                else:
+                    results["failed"].append(paper_id)
+                
+                # Print progress
+                log_thread_safe(
+                    log,
+                    "info",
+                    f"[Batch {batch_idx + 1}/{num_batches} | {batch_completed}/{len(batch)}] "
+                    f"[Overall {total_completed}/{len(matches)}] {paper_id}: "
+                    f"Task1={'✓' if task1_ok else '✗'} Task2={'✓' if task2_ok else '✗'}",
+                )
         
-        # Small delay to avoid rate limiting
-        if task2_ok and idx < len(matches):
-            time.sleep(1)
+        # Small delay between batches to avoid rate limiting
+        if batch_idx < num_batches - 1:
+            log.info(f"\nBatch {batch_idx + 1} complete. Pausing briefly before next batch...")
+            time.sleep(2)
     
     # Summary
     log.info("\n" + "=" * 80)

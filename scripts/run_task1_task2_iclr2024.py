@@ -46,11 +46,28 @@ def setup_logging(verbose: bool = False) -> logging.Logger:
 # Thread lock for thread-safe logging
 _log_lock = threading.Lock()
 
+# Task 2 rate limiting (1.5 seconds between requests)
+_task2_lock = threading.Lock()
+_task2_last_call = 0.0
+_task2_min_interval = 1.5
+
 
 def log_thread_safe(logger: logging.Logger, level: str, message: str) -> None:
     """Log message in a thread-safe manner."""
     with _log_lock:
         getattr(logger, level)(message)
+
+
+def rate_limit_task2() -> None:
+    """Enforce rate limiting for Task 2: minimum 1.5 seconds between calls."""
+    global _task2_last_call
+    with _task2_lock:
+        now = time.time()
+        elapsed = now - _task2_last_call
+        if elapsed < _task2_min_interval:
+            sleep_time = _task2_min_interval - elapsed
+            time.sleep(sleep_time)
+        _task2_last_call = time.time()
 
 
 def find_matching_papers(
@@ -182,6 +199,9 @@ def process_paper(
         log_thread_safe(logger, "info", f"[{paper_id}] Task 2 output exists, skipping...")
         task2_success = True
     else:
+        # Rate limit Task 2 to avoid API throttling (1.5s between requests)
+        rate_limit_task2()
+        
         log_thread_safe(logger, "info", f"[{paper_id}] Running Task 2 related works retrieval...")
         try:
             task2_result = retrieve_related_works(
@@ -388,11 +408,6 @@ def main() -> None:
                     f"[Overall {total_completed}/{len(matches)}] {paper_id}: "
                     f"Task1={'✓' if task1_ok else '✗'} Task2={'✓' if task2_ok else '✗'}",
                 )
-        
-        # Small delay between batches to avoid rate limiting
-        if batch_idx < num_batches - 1:
-            log.info(f"\nBatch {batch_idx + 1} complete. Pausing briefly before next batch...")
-            time.sleep(2)
     
     # Summary
     log.info("\n" + "=" * 80)

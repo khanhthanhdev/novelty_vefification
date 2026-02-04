@@ -176,51 +176,86 @@ time filter: remove papers later than the target paper's release year
 
 optional diversify by MMR so results aren’t near-duplicates
 
+
 Output: candidate_pool_topN (N typically < 30)
 
-3) Select evidence per review claim (no LLM)
+3) Verify review claims against evidence (LLM Judge)
 
-Now we tailor evidence to each review novelty claim.
+This step verifies each novelty-review sentence against each related paper using an LLM Judge.
 
-3.1 Embed each claim (small embedding model, not LLM reasoning)
+**Input:**
 
-For each claim Ci, compute embedding on:
+- `S = {s}` — set of novelty-review sentences determined by Phase 1
+- `a` — Abstract + Introduction of the paper being reviewed
+- `B = {b}` — set of (Abstract + Introduction) of related papers found in Phase 2
 
-claim text + paper core_task + key_terms (concatenate)
+**Process:**
 
-3.2 Pick Top-M candidates per claim (M=5)
+```
+for s in S:
+    for b in B:
+        Query = "Review sentence:" + s + "\nPaper being reviewed:" + a + "\nRelated work:" + b + INSTRUCTION_PROMPT
+        result = Judge(Query)
+```
 
-Ranking score (simple and strong):
+3.1 Judge Classification (required)
 
-score = 0.7 * cos_sim(claim, cand_abstract) + 0.3 * cos_sim(paper_contrib, cand_abstract)
-Optionally add a BM25 term-overlap bonus.
+The Judge must first classify the review sentence:
 
-Output
+| Field | Values | Description |
+|-------|--------|-------------|
+| `Claim` | 0 / 1 | Whether `s` is a claim made by the Reviewer about paper `a` |
+| `Proof` | 0 / 1 | Whether `s` is a proof/support of a claim made by the Reviewer about paper `a` |
 
+3.2 Judge Score Output
+
+The Judge assigns a score based on how the review sentence relates to the evidence:
+
+| Score | Label | Description |
+|-------|-------|-------------|
+| **+2** | `SUPPORTED` | Reviewer claim aligns with retrieved evidence |
+| **+1** | `OVERSTATED` | Some relation exists but reviewer claims "same / not novel" too strongly |
+| **0** | `AMBIGUOUS` | Claim is too vague or unverifiable |
+| **-1** | `UNDERSTATED` | Reviewer misses very close prior work present in candidates |
+| **-2** | `UNSUPPORTED` | Evidence contradicts or no evidence found in candidate set |
+
+3.3 Judge Output Format
+
+```json
 {
-  "claim_id": "C1",
-  "evidence_set": ["P123","P045","P987","P611","P322"]
+  "review_sentence_id": "S_001",
+  "related_paper_id": "P123",
+  "classification": {
+    "claim": 1,
+    "proof": 0
+  },
+  "score": 2,
+  "label": "SUPPORTED",
+  "explanation": "Short explanation: why picking that class and why that score"
 }
+```
 
-3.3 Build “evidence packs” (compact)
+3.4 Aggregation (per review sentence)
 
-For each selected candidate, store only:
+After processing all `(s, b)` pairs, aggregate results per review sentence:
 
-title, year, venue
+```json
+{
+  "review_sentence_id": "S_001",
+  "text": "verbatim review sentence",
+  "classification": {"claim": 1, "proof": 0},
+  "evidence_results": [
+    {"related_paper_id": "P123", "score": 2, "label": "SUPPORTED", "explanation": "..."},
+    {"related_paper_id": "P045", "score": 1, "label": "OVERSTATED", "explanation": "..."}
+  ],
+  "final_score": "max or weighted aggregate of evidence_results",
+  "best_evidence": ["P123"]
+}
+```
 
-abstract
+4) Score the reviewer (deterministic scoring + optional small LLM)
 
-plus 2–4 “key sentences” extracted without LLM:
-
-e.g., select sentences from abstract with highest BM25 overlap with claim
-
-This keeps verification calls small.
-
-4) Verify review claims against evidence (small LLM calls)
-
-This step outputs a support label for each review claim, plus evidence pointers.
-
-4.1 Verification task definition (what the verifier must decide)
+You now have: extracted novelty claims + claim-level verification labels + citation parsing.
 
 For each claim Ci, decide:
 
@@ -281,11 +316,7 @@ run second verifier only when label is UNSUPPORTED or OVERSTATED with low confid
 
 Cost control: Most claims will be decided in one pass.
 
-5) Score the reviewer (deterministic scoring + optional small LLM)
-
-You now have: extracted novelty claims + claim-level verification labels + citation parsing.
-
-5.1 Core novelty-grounding metrics (no LLM)
+4.1 Core novelty-grounding metrics (no LLM)
 
 Let N = number of novelty claims in the review.
 

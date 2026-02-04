@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Run Task 1 and Task 2 for all papers in ICLR_2024 that have both paper content and review.
+Run Task 1 and Task 2 (and optional Task 3) for all papers in ICLR_2024 that have both paper content and review.
 
 Usage:
     # Process all papers
@@ -14,6 +14,9 @@ Usage:
 
     # Dry run to see what would be processed
     python scripts/run_task1_task2_iclr2024.py --dry-run
+
+    # Also run Task 3 (LLM Judge)
+    python scripts/run_task1_task2_iclr2024.py --run-task3
 """
 
 import argparse
@@ -24,12 +27,16 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from novelty_assessment.task1_extractor import extract_task1, Task1ExtractionError
 from novelty_assessment.task2_related_works import retrieve_related_works
+from novelty_assessment.task3_judge import (
+    extract_abstract_intro_from_text,
+    run_task3_verification,
+)
 
 
 def setup_logging(verbose: bool = False) -> logging.Logger:
@@ -120,21 +127,32 @@ def process_paper(
     paper_year: int = 2024,
     mode: str = "per_contribution",
     skip_existing: bool = False,
+    run_task3: bool = False,
+    task3_max_related_per_sentence: int = 30,
+    task3_max_pairs: Optional[int] = None,
+    task3_aggregate_policy: str = "max",
+    task3_max_tokens: int = 800,
+    task3_temperature: float = 0.0,
+    task3_cache: bool = False,
+    task3_cache_ttl: str = "1h",
     logger: logging.Logger,
-) -> Tuple[str, bool, bool]:
+) -> Tuple[str, bool, bool, Optional[bool]]:
     """
     Process a single paper: run Task 1 and Task 2.
     
     Returns:
-        (paper_id, task1_success, task2_success)
+        (paper_id, task1_success, task2_success, task3_success_or_none)
     """
     task1_output_path = output_dir / paper_id / "task1_result.json"
     task2_output_path = output_dir / paper_id / "task2_result.json"
+    task3_output_path = output_dir / paper_id / "task3_result.json"
     
     # Check if we should skip
-    if skip_existing and task1_output_path.exists() and task2_output_path.exists():
+    if skip_existing and task1_output_path.exists() and task2_output_path.exists() and (
+        (not run_task3) or task3_output_path.exists()
+    ):
         log_thread_safe(logger, "info", f"[{paper_id}] Skipping (outputs already exist)")
-        return (paper_id, True, True)
+        return (paper_id, True, True, True if run_task3 else None)
     
     log_thread_safe(logger, "info", f"[{paper_id}] Processing paper...")
     
@@ -144,7 +162,7 @@ def process_paper(
         review_text = load_text_file(review_path)
     except Exception as e:
         log_thread_safe(logger, "error", f"[{paper_id}] Failed to load files: {e}")
-        return (paper_id, False, False)
+        return (paper_id, False, False, None)
     
     log_thread_safe(logger, "info", f"[{paper_id}] Paper: {len(paper_text)} chars, Review: {len(review_text)} chars")
     
@@ -187,17 +205,26 @@ def process_paper(
             
         except Task1ExtractionError as e:
             log_thread_safe(logger, "error", f"[{paper_id}] Task 1 extraction failed: {e}")
-            return (paper_id, False, False)
+            return (paper_id, False, False, None)
         except Exception as e:
             log_thread_safe(logger, "error", f"[{paper_id}] Task 1 unexpected error: {e}", exc_info=True)
-            return (paper_id, False, False)
+            return (paper_id, False, False, None)
     
     # Task 2: Related works retrieval
     task2_success = False
+    task2_result = None
     
     if skip_existing and task2_output_path.exists():
         log_thread_safe(logger, "info", f"[{paper_id}] Task 2 output exists, skipping...")
-        task2_success = True
+        if run_task3:
+            try:
+                with task2_output_path.open("r", encoding="utf-8") as f:
+                    task2_result = json.load(f)
+                task2_success = True
+            except Exception as e:
+                log_thread_safe(logger, "warning", f"[{paper_id}] Failed to load existing Task 2 output: {e}")
+        else:
+            task2_success = True
     else:
         # Rate limit Task 2 to avoid API throttling (1.5s between requests)
         rate_limit_task2()
@@ -229,9 +256,69 @@ def process_paper(
             
         except Exception as e:
             log_thread_safe(logger, "error", f"[{paper_id}] Task 2 failed: {e}", exc_info=True)
-            return (paper_id, task1_success, False)
-    
-    return (paper_id, task1_success, task2_success)
+            return (paper_id, task1_success, False, None)
+
+    if not task2_success:
+        return (paper_id, task1_success, False, None)
+
+    # Task 3: Review-claim verification (LLM Judge)
+    task3_success: Optional[bool] = None
+    if run_task3:
+        if skip_existing and task3_output_path.exists():
+            log_thread_safe(logger, "info", f"[{paper_id}] Task 3 output exists, skipping...")
+            task3_success = True
+        else:
+            try:
+                log_thread_safe(logger, "info", f"[{paper_id}] Running Task 3 verification...")
+
+                # Extract review sentences from Task 1
+                review_data = (task1_result or {}).get("review", {})
+                novelty_claims = review_data.get("novelty_claims") or []
+                review_sentences = []
+                for idx, claim in enumerate(novelty_claims):
+                    if not isinstance(claim, dict):
+                        continue
+                    text = (claim.get("text") or "").strip()
+                    if not text:
+                        continue
+                    sentence_id = claim.get("claim_id") or f"S_{idx + 1:03d}"
+                    review_sentences.append(
+                        {
+                            "review_sentence_id": str(sentence_id),
+                            "text": text,
+                        }
+                    )
+
+                # Extract related works from Task 2
+                related_works = task2_result.get("candidate_pool_top30") or []
+
+                # Build paper context (Abstract + Introduction)
+                paper_context = extract_abstract_intro_from_text(
+                    paper_text=paper_text,
+                )
+
+                task3_result = run_task3_verification(
+                    review_sentences=review_sentences,
+                    paper_context=paper_context,
+                    related_works=related_works,
+                    max_related_per_sentence=task3_max_related_per_sentence,
+                    max_pairs=task3_max_pairs,
+                    max_tokens=task3_max_tokens,
+                    temperature=task3_temperature,
+                    use_cache=task3_cache,
+                    cache_ttl=task3_cache_ttl,
+                    aggregate_policy=task3_aggregate_policy,
+                    logger=logger,
+                )
+
+                save_json(task3_output_path, task3_result)
+                log_thread_safe(logger, "info", f"[{paper_id}] ✓ Task 3 completed, saved to {task3_output_path}")
+                task3_success = True
+            except Exception as e:
+                log_thread_safe(logger, "error", f"[{paper_id}] Task 3 failed: {e}", exc_info=True)
+                task3_success = False
+
+    return (paper_id, task1_success, task2_success, task3_success)
 
 
 def main() -> None:
@@ -294,6 +381,52 @@ def main() -> None:
         help="Skip papers that already have output files",
     )
     parser.add_argument(
+        "--run-task3",
+        action="store_true",
+        help="Run Task 3 review-claim verification after Task 2",
+    )
+    parser.add_argument(
+        "--task3-max-related-per-sentence",
+        type=int,
+        default=30,
+        help="Limit related works per review sentence (default: 30)",
+    )
+    parser.add_argument(
+        "--task3-max-pairs",
+        type=int,
+        help="Cap total Task 3 judge pairs",
+    )
+    parser.add_argument(
+        "--task3-aggregate-policy",
+        type=str,
+        choices=["max", "mean", "weighted"],
+        default="max",
+        help="Aggregation policy for Task 3 final_score (default: max)",
+    )
+    parser.add_argument(
+        "--task3-max-tokens",
+        type=int,
+        default=800,
+        help="Max tokens for Task 3 Judge responses (default: 800)",
+    )
+    parser.add_argument(
+        "--task3-temperature",
+        type=float,
+        default=0.0,
+        help="LLM temperature for Task 3 (default: 0.0)",
+    )
+    parser.add_argument(
+        "--task3-cache",
+        action="store_true",
+        help="Enable Task 3 LLM cache (if supported)",
+    )
+    parser.add_argument(
+        "--task3-cache-ttl",
+        type=str,
+        default="1h",
+        help="Task 3 LLM cache TTL (default: 1h)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="List papers that would be processed without actually processing them",
@@ -348,6 +481,7 @@ def main() -> None:
         "total": len(matches),
         "task1_success": 0,
         "task2_success": 0,
+        "task3_success": 0,
         "both_success": 0,
         "failed": [],
     }
@@ -380,6 +514,14 @@ def main() -> None:
                     paper_year=args.paper_year,
                     mode=args.mode,
                     skip_existing=args.skip_existing,
+                    run_task3=args.run_task3,
+                    task3_max_related_per_sentence=args.task3_max_related_per_sentence,
+                    task3_max_pairs=args.task3_max_pairs,
+                    task3_aggregate_policy=args.task3_aggregate_policy,
+                    task3_max_tokens=args.task3_max_tokens,
+                    task3_temperature=args.task3_temperature,
+                    task3_cache=args.task3_cache,
+                    task3_cache_ttl=args.task3_cache_ttl,
                     logger=log,
                 )
                 future_to_paper_id[future] = paper_id
@@ -389,15 +531,18 @@ def main() -> None:
             for future in as_completed(future_to_paper_id):
                 batch_completed += 1
                 total_completed += 1
-                paper_id, task1_ok, task2_ok = future.result()
+                paper_id, task1_ok, task2_ok, task3_ok = future.result()
                 
                 if task1_ok:
                     results["task1_success"] += 1
                 if task2_ok:
                     results["task2_success"] += 1
+                if task3_ok:
+                    results["task3_success"] += 1
                 if task1_ok and task2_ok:
                     results["both_success"] += 1
-                else:
+                all_ok = task1_ok and task2_ok and (not args.run_task3 or task3_ok)
+                if not all_ok:
                     results["failed"].append(paper_id)
                 
                 # Print progress
@@ -406,7 +551,8 @@ def main() -> None:
                     "info",
                     f"[Batch {batch_idx + 1}/{num_batches} | {batch_completed}/{len(batch)}] "
                     f"[Overall {total_completed}/{len(matches)}] {paper_id}: "
-                    f"Task1={'✓' if task1_ok else '✗'} Task2={'✓' if task2_ok else '✗'}",
+                    f"Task1={'✓' if task1_ok else '✗'} Task2={'✓' if task2_ok else '✗'}"
+                    + (f" Task3={'✓' if task3_ok else '✗'}" if args.run_task3 else ""),
                 )
     
     # Summary
@@ -415,6 +561,8 @@ def main() -> None:
     log.info(f"Total papers: {results['total']}")
     log.info(f"Task 1 success: {results['task1_success']}/{results['total']}")
     log.info(f"Task 2 success: {results['task2_success']}/{results['total']}")
+    if args.run_task3:
+        log.info(f"Task 3 success: {results['task3_success']}/{results['total']}")
     log.info(f"Both success: {results['both_success']}/{results['total']}")
     
     if results["failed"]:
